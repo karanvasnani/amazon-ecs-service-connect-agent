@@ -26,6 +26,7 @@ import (
 
 	"github.com/aws/aws-app-mesh-agent/agent/client"
 	"github.com/aws/aws-app-mesh-agent/agent/envoy_bootstrap/env"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -144,6 +145,11 @@ func buildMetadataForEcsPlatform(mapping map[string]interface{}) {
 			mapping[AvailabilityZoneKey] = availabilityZone
 			delete(ecsMetadata, AvailabilityZoneKey)
 		}
+		// The AZ ID info is available from ECS container metadata itself
+		if availabilityZoneID, exists := ecsMetadata[AvailabilityZoneIDKey]; exists {
+			mapping[AvailabilityZoneIDKey] = availabilityZoneID
+			delete(ecsMetadata, AvailabilityZoneIDKey)
+		}
 
 		// Build SupportedIPFamilies info in platform
 		if supportedIPFamilies != "" {
@@ -185,6 +191,19 @@ func BuildMetadata() (*map[string]interface{}, error) {
 	}
 
 	return &md, nil
+}
+
+func GetZoneId(metadata *structpb.Struct) string {
+	if metadata == nil {
+		return ""
+	}
+	metadataMap := metadata.AsMap()
+	if mapping := metadataMap[metadataNamespace]; mapping != nil {
+		if zoneId, ok := mapping.(map[string]interface{})[AvailabilityZoneIDKey].(string); ok {
+			return zoneId
+		}
+	}
+	return ""
 }
 
 func getEcsContainerMetadata(uri string, ecsMetadata map[string]interface{}) {

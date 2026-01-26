@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func setup() {
@@ -604,4 +605,60 @@ func TestBuildSupportedIPFamiliesBridgeMode(t *testing.T) {
 
 	supportedIPFamilies = platformMap["supportedIPFamilies"].(string)
 	assert.Equal(t, "ALL", supportedIPFamilies) // awsvpc mode with both IPv4 and IPv6
+}
+
+func TestGetZoneId_WithValidMetadata(t *testing.T) {
+	metadata, _ := structpb.NewStruct(map[string]interface{}{
+		"aws.appmesh.platformInfo": map[string]interface{}{
+			"AvailabilityZoneID": "use1-az1",
+		},
+	})
+
+	zone := GetZoneId(metadata)
+	assert.Equal(t, "use1-az1", zone)
+}
+
+func TestGetZoneId_WithNilMetadata(t *testing.T) {
+	zone := GetZoneId(nil)
+	assert.Equal(t, "", zone)
+}
+
+func TestGetZoneId_WithEmptyMetadata(t *testing.T) {
+	metadata, _ := structpb.NewStruct(map[string]interface{}{})
+
+	zone := GetZoneId(metadata)
+	assert.Equal(t, "", zone)
+}
+
+func TestGetZoneId_WithMissingNamespace(t *testing.T) {
+	metadata, _ := structpb.NewStruct(map[string]interface{}{
+		"other.namespace": map[string]interface{}{
+			"AvailabilityZoneID": "use1-az1",
+		},
+	})
+
+	zone := GetZoneId(metadata)
+	assert.Equal(t, "", zone)
+}
+
+func TestGetZoneId_WithMissingAvailabilityZoneID(t *testing.T) {
+	metadata, _ := structpb.NewStruct(map[string]interface{}{
+		"aws.appmesh.platformInfo": map[string]interface{}{
+			"AvailabilityZone": "us-east-1a",
+		},
+	})
+
+	zone := GetZoneId(metadata)
+	assert.Equal(t, "", zone)
+}
+
+func TestGetZoneId_WithNonStringAvailabilityZoneID(t *testing.T) {
+	metadata, _ := structpb.NewStruct(map[string]interface{}{
+		"aws.appmesh.platformInfo": map[string]interface{}{
+			"AvailabilityZoneID": 12345,
+		},
+	})
+
+	zone := GetZoneId(metadata)
+	assert.Equal(t, "", zone)
 }

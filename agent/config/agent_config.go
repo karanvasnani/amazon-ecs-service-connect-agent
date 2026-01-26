@@ -58,6 +58,7 @@ const (
 	ENVOY_ADMIN_PORT_DEFAULT             = 9901
 	ENVOY_ADMIN_MODE_DEFAULT             = "tcp"
 	ENVOY_ADMIN_UDS_PATH                 = "/tmp/envoy_admin.sock"
+	ENVOY_LOCAL_CLUSTER_NAME             = "local_cluster"
 	ENVOY_ADMIN_UDS_FILE_MODE_DEFAULT    = 384 // decimal form of file permission 0600 (octal)
 	ENVOY_READY_ENDPOINT_URL             = "/ready"
 	ENVOY_STATS_ENDPOINT_URL             = "/stats"

@@ -493,12 +493,17 @@ func buildAdmin(agentConfig config.AgentConfig) (*boot.Admin, error) {
 	}
 }
 
-func buildNode(id string, cluster string, metadata *structpb.Struct) *core.Node {
-	return &core.Node{
+func buildNode(id string, cluster string, region string, zone string, metadata *structpb.Struct) *core.Node {
+	node := &core.Node{
 		Id:       id,
 		Cluster:  cluster,
 		Metadata: metadata,
 	}
+
+	if zone != "" && region != "" {
+		node.Locality = &core.Locality{Zone: zone, Region: region}
+	}
+	return node
 }
 
 func generateStaticRuntimeLayer(s *structpb.Struct) *boot.RuntimeLayer {
@@ -543,6 +548,7 @@ func buildClusterManager() *boot.ClusterManager {
 		OutlierDetection: &boot.ClusterManager_OutlierDetection{
 			EventLogPath: logPath,
 		},
+		LocalClusterName: config.ENVOY_LOCAL_CLUSTER_NAME,
 	}
 }
 
@@ -630,16 +636,9 @@ func buildRegionalAdsGrpcService(endpoint string, region string, signingName str
 }
 
 // Make the config source used to point things like LDS or CDS to ADS
-func buildAdsConfigSource() (*core.ConfigSource, error) {
-	// This timeout is in seconds
-	timeout, err := env.OrInt("ENVOY_INITIAL_FETCH_TIMEOUT", 0)
-	if err != nil {
-		return nil, err
-	}
+func buildAdsConfigSource(initialFetchTimeout *durationpb.Duration) (*core.ConfigSource, error) {
 	return &core.ConfigSource{
-		InitialFetchTimeout: &durationpb.Duration{
-			Seconds: int64(timeout),
-		},
+		InitialFetchTimeout: initialFetchTimeout,
 		ConfigSourceSpecifier: &core.ConfigSource_Ads{
 			Ads: &core.AggregatedConfigSource{},
 		},
@@ -664,7 +663,16 @@ func buildRegionalDynamicResources(endpoint string, region string, signingName s
 }
 
 func buildDynamicResources(ads *core.GrpcService) (*boot.Bootstrap_DynamicResources, error) {
-	configSource, err := buildAdsConfigSource()
+	// This timeout is in seconds
+	timeout, err := env.OrInt("ENVOY_INITIAL_FETCH_TIMEOUT", 0)
+	if err != nil {
+		return nil, err
+	}
+	initialFetchTimeout := &durationpb.Duration{
+		Seconds: int64(timeout),
+	}
+
+	configSource, err := buildAdsConfigSource(initialFetchTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -845,6 +853,34 @@ func appendXRayTracing(b *boot.Bootstrap, nodeId string, cluster string, fileUti
 				Name: "envoy.tracers.xray",
 				ConfigType: &trace.Tracing_Http_TypedConfig{
 					TypedConfig: packedCfg,
+				},
+			},
+		},
+	}
+	return mergeBootstrap(b, bt)
+}
+
+func appendStaticLocalCluster(b *boot.Bootstrap) error {
+	// for static local cluster, we set the timeout as the minimum,
+	// to not fail envoy which does not turn on zone aware routing
+	initialFetchTimeout := &durationpb.Duration{
+		Nanos: 1000000,
+	}
+	configSource, err := buildAdsConfigSource(initialFetchTimeout)
+	if err != nil {
+		return err
+	}
+	bt := &boot.Bootstrap{
+		StaticResources: &boot.Bootstrap_StaticResources{
+			Clusters: []*cluster.Cluster{
+				&cluster.Cluster{
+					Name: config.ENVOY_LOCAL_CLUSTER_NAME,
+					ClusterDiscoveryType: &cluster.Cluster_Type{
+						Type: cluster.Cluster_EDS,
+					},
+					EdsClusterConfig: &cluster.Cluster_EdsClusterConfig{
+						EdsConfig: configSource,
+					},
 				},
 			},
 		},
@@ -1451,6 +1487,11 @@ func bootstrap(agentConfig config.AgentConfig, fileUtil FileUtil, envoyCLIInst E
 		return nil, err
 	}
 
+	region, err := getRegion()
+	if err != nil {
+		return nil, err
+	}
+
 	var dr *boot.Bootstrap_DynamicResources
 	if agentConfig.XdsEndpointUdsPath != "" {
 		dr, err = buildDynamicResourcesForRelayEndpoint(agentConfig.XdsEndpointUdsPath)
@@ -1458,11 +1499,6 @@ func bootstrap(agentConfig config.AgentConfig, fileUtil FileUtil, envoyCLIInst E
 			return nil, err
 		}
 	} else {
-		region, err := getRegion()
-		if err != nil {
-			return nil, err
-		}
-
 		xdsEndpoint, err := getRegionalXdsEndpoint(region, envoyCLIInst)
 		if err != nil || xdsEndpoint == nil {
 			return nil, err
@@ -1489,12 +1525,19 @@ func bootstrap(agentConfig config.AgentConfig, fileUtil FileUtil, envoyCLIInst E
 		return nil, err
 	}
 
+	zone := platforminfo.GetZoneId(metadata)
+
 	b := &boot.Bootstrap{
 		Admin:            admin,
-		Node:             buildNode(id, clusterId, metadata),
+		Node:             buildNode(id, clusterId, region, zone, metadata),
 		LayeredRuntime:   lr,
 		DynamicResources: dr,
 		ClusterManager:   buildClusterManager(),
+	}
+
+	// append Static cluster for service connect only
+	if agentConfig.XdsEndpointUdsPath != "" {
+		appendStaticLocalCluster(b)
 	}
 
 	// Tracing
